@@ -154,3 +154,24 @@ C = [
      0xfa, 0xf4, 0x17, 0xd5, 0xd9, 0xb2, 0x1b, 0x99, 0x48, 0xbc, 0x92, 0x4a, 0xf1, 0x1b, 0xd7, 0x20
     ]
     ]
+
+def S_transform(data: bytes) -> bytes:
+    return bytes(Pi[b] for b in data)
+
+def P_transform(data: bytes) -> bytes:
+    return bytes(data[Tau[i]] for i in range(64))
+
+def L_transform(data: bytes) -> bytes: #Оптимизировать в будущем
+    result = bytearray(64)
+    for i in range(8):
+        for j in range(8):
+            val = 0
+            for k in range(64):
+                if data[k] & (1 << (7 - j)):
+                    val ^= A[k][j]
+            result[i * 8 + j] = val
+    return bytes(result)
+
+def LPS(data: bytes) -> bytes:
+    return L_transform(P_transform(S_transform(data)))
+
