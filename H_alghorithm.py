@@ -158,20 +158,88 @@ C = [
 def S_transform(data: bytes) -> bytes:
     return bytes(Pi[b] for b in data)
 
+
 def P_transform(data: bytes) -> bytes:
     return bytes(data[Tau[i]] for i in range(64))
 
-def L_transform(data: bytes) -> bytes: #Оптимизировать в будущем
-    result = bytearray(64)
-    for i in range(8):
-        for j in range(8):
-            val = 0
-            for k in range(64):
-                if data[k] & (1 << (7 - j)):
-                    val ^= A[k][j]
-            result[i * 8 + j] = val
-    return bytes(result)
+
+def L_transform(data: bytes) -> bytes:
+    if len(data) != 64:
+        raise ValueError(f"Expected 64-byte block, got {len(data)} bytes")
+
+    # result_words[b] — 64-битный аккумулятор для выходного слова b (b=0…7)
+    result_words = [0] * 8
+
+    # Пробегаем по всем 64 байтам входа
+    for k in range(64):
+        byte = data[k]
+        # Если в этом байте установлен бит b, XOR-им в result_words[b] весь вектор A[k]
+        for b in range(8):
+            if (byte >> b) & 1:
+                # Собираем 64-битное слово из A[k] (8 байт little-endian)
+                vec = int.from_bytes(bytes(A[k]), 'little')
+                result_words[b] ^= vec
+
+    # Теперь упакуем 8 слов по 64 бита обратно в 64-байтный блок (little-endian)
+    out = bytearray(64)
+    for b in range(8):
+        word_bytes = result_words[b].to_bytes(8, 'little')
+        # word_bytes — это 8 байт, которые должны занять позиции b, b+8, b+16… b+56
+        for i in range(8):
+            out[b + 8*i] = word_bytes[i]
+
+    return bytes(out)
 
 def LPS(data: bytes) -> bytes:
     return L_transform(P_transform(S_transform(data)))
 
+
+def key_schedule(K0: bytes, C: list[list[int]]) -> list[bytes]:
+    Ks = [K0]
+    for i in range(1, 13):
+        x = bytes(a ^ b for a, b in zip(Ks[i-1], bytes(C[i-1])))
+        Ks.append(LPS(x))
+    return Ks
+
+
+def E(K0: bytes, M:bytes, C: list[list[bytes]]) -> bytes:
+    Ks = key_schedule(K0, C)
+    X = M
+    for i in range(1, 13):
+        X = LPS(bytes(a ^ b for a, b in zip(X, Ks[i])))
+    return bytes(a ^ b for a, b in zip(X, Ks[0]))
+
+
+def g(h: bytes, m: bytes, C:list[list[int]]) -> bytes:
+    K0 = bytes(a ^ b for a, b in zip(h, m))
+    E_out = E(K0, h, C)
+    return bytes(a ^ b ^ c for a, b, c in zip(E_out, h, m))
+
+
+def H256(message: bytes, C: list[list[int]]) -> bytes:
+    # IV = (0x01)^64
+    h = bytes([0x01] * 64)
+    N = 0
+    Sigma = 0
+
+    # raw slices без padding’а
+    slices = [message[i:i+64] for i in range(0, len(message), 64)]
+    # даже для пустого или кратного 64 надо сделать хотя бы один slice
+    if not slices or len(slices[-1]) == 64:
+        slices.append(b"")
+
+    # обрабатываем каждый кусок с корректным padding’ом
+    for m in slices:
+        pad = m + b"\x01" + b"\x00" * (64 - len(m) - 1)
+        h = g(h, pad, C)
+        N = (N + len(m) * 8) % (1 << 512)
+        Sigma = (Sigma + int.from_bytes(pad, "little")) % (1 << 512)
+
+    # N-блок и Σ-блок
+    h = g(h, N.to_bytes(64, "little"), C)
+    h = g(h, Sigma.to_bytes(64, "little"), C)
+
+    # взять старшие 256 бит и вывести в big-endian
+    return h[::1][:32]
+    
+    
